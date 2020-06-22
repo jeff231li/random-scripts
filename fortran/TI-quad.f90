@@ -20,6 +20,9 @@ PROGRAM TI_quadrature
     REAL,    ALLOCATABLE, DIMENSION(:)   :: w, lambda
     INTEGER, ALLOCATABLE, DIMENSION(:)   :: time_step
 
+    ! See https://pomax.github.io/bezierinfo/legendre-gauss.html for a
+    ! list of quadrature values for integration limits -1 to 1.
+
     ! Gaussian Quadrature Coeffiicients
     DATA w1  /1.00000/
     DATA w2  /0.50000, 0.50000/
