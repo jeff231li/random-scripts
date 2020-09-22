@@ -4,6 +4,7 @@ import numpy as np
 class BindingFE(object):
     @property
     def temperature(self):
+        """float: Temperature of the simulation."""
         return self._temperature
 
     @temperature.setter
@@ -12,6 +13,7 @@ class BindingFE(object):
 
     @property
     def mc_steps(self):
+        """int: Number of Monte Carlo steps for bootstrapping."""
         return self._mc_steps
 
     @mc_steps.setter
@@ -20,6 +22,7 @@ class BindingFE(object):
 
     @property
     def protonated(self):
+        """list: The binding free-energy of the protonated ligand, [fe, sem]"""
         return self._protonated
 
     @protonated.setter
@@ -28,6 +31,7 @@ class BindingFE(object):
 
     @property
     def unprotonated(self):
+        """list: The binding free-energy of the unprotonated ligand, [fe, sem]"""
         return self._unprotonated
 
     @unprotonated.setter
@@ -36,6 +40,7 @@ class BindingFE(object):
 
     @property
     def results(self):
+        """dict: Results of the combined binding free-energy in dictionary"""
         return self._results
 
     @results.setter
@@ -44,6 +49,7 @@ class BindingFE(object):
 
     @property
     def pKa(self):
+        """float: pKa value of the ligand."""
         return self._pKa
 
     @pKa.setter
@@ -52,6 +58,7 @@ class BindingFE(object):
 
     @property
     def pH(self):
+        """float: pH value of the ligand."""
         return self._pH
 
     @pH.setter
