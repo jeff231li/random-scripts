@@ -1,0 +1,71 @@
+options:
+  verbose: yes
+  setup_dir: setup
+  resume_simulation: yes
+  output_dir: CB8-G3-0
+
+  temperature: 298.15*kelvin
+  pressure: 1*atmosphere
+  constraints: HBonds
+  anisotropic_dispersion_cutoff: 10*angstroms
+
+  minimize: yes
+  default_number_of_iterations: 500
+
+  annihilate_electrostatics: yes
+  softcore_beta: 0.0
+  softcore_d: 1
+  softcore_e: 1
+  softcore_f: 2
+
+  annihilate_sterics: yes
+  softcore_alpha: 0.5
+  softcore_a: 1
+  softcore_b: 1
+  softcore_c: 6
+
+  alchemical_pme_treatment: exact
+
+# Solvents
+# --------
+common_PME: &common_PME
+  nonbonded_method: PME
+  clearance: 12*angstroms
+  nonbonded_cutoff: 10*angstroms
+  switch_distance: 9* angstroms
+  ewald_error_tolerance: 1.0e-4
+
+solvents:
+  pme:
+    <<: *common_PME
+    solvent_model: tip3p
+
+# Systems
+# -------
+common_system: &common_system
+  ligand_dsl: resname GST
+  solvent: pme
+
+systems:
+  CB8-G3-0:
+    phase1_path: [build_files/complex.prmtop,
+                  build_files/complex.rst7]
+    phase2_path: [build_files/solvent.prmtop,
+                  build_files/solvent.rst7]
+    <<: *common_system
+
+protocols:
+  protocol-CB8G3:
+    complex:
+      alchemical_path: auto
+
+    solvent:
+      alchemical_path: auto
+
+experiment-CB8G3:
+  system: CB8-G3-0
+  protocol: protocol-CB8G3
+  restraint:
+    type: Harmonic
+
+experiments: [experiment-CB8G3]

@@ -126,8 +126,8 @@ class bootstrap(object):
 
 if __name__ == '__main__':
     calc = bootstrap()
-    calc.free_energy = [[-3.71, 0.27], [-4.22, 0.26]]
-    calc.enthalpy = [[-2.21, 0.95], [-1.07, 0.36]]
+    calc.free_energy = [[-5.60, 0.31], [-5.53, 0.17]]
+    calc.enthalpy = [[5.63, 2.02], [1.23, 0.66]]
     calc.sampleDG()
     calc.sampleDH()
     # results = calc.results
