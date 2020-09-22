@@ -95,7 +95,7 @@ class BindingFE(object):
         print("Running bootstrap on free-energy results")
         cycle_results = np.empty(self.mc_steps)
 
-        for n in range(self._mc_steps):
+        for n in range(self.mc_steps):
 
             # Dissociation constant for protonated
             Kd1 = np.exp(
