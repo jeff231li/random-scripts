@@ -128,7 +128,7 @@ class BindingFE(object):
 if __name__ == '__main__':
     calc = BindingFE()
     calc.temperature = 298.15
-    calc.mc_steps = 1000
+    calc.mc_steps = 1000000
     calc.pKa = 7.5
     calc.pH = 3.5
     calc.protonated = [-13.51, 0.46]
