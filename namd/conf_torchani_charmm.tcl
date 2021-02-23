@@ -26,6 +26,10 @@ set equilSteps        50000
 #############################################################
 ## SIMULATION PARAMETERS                                   ##
 #############################################################
+# Input File
+structure          $CharmmPsfFile
+coordinates        $CharmmPdbFile
+
 # CHARMM Force Field
 paraTypeCharmm     on
 parameters         par_all36_prot.prm
