@@ -133,9 +133,9 @@ if {$Min == 1} {
 }
 
 if {$Heat == 1} {
-  for {set temp 50} {$temp <= $temperature} {incr i 50} {
-    langevinTemp $temperature
-    reinitvels   $temperature
+  for {set tempi 50} {$tempi <= $temperature} {incr tempi 50} {
+    langevinTemp $tempi
+    reinitvels   $tempi
     run          $heatSteps
   }
   langevinTemp $temperature
