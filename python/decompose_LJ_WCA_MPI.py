@@ -1,11 +1,12 @@
 import json
+import logging
 from copy import deepcopy
+from importlib import reload
 
 import numpy as np
 import simtk.unit as unit
 from MDAnalysis import Universe
 from mpi4py import MPI
-
 from paprika.io import NumpyEncoder
 from simtk.openmm import (
     CustomNonbondedForce,
@@ -18,17 +19,26 @@ from simtk.openmm import (
 from simtk.openmm.app import PDBFile, Simulation
 from tqdm import tqdm
 
-# Initialize MPI
+reload(logging)
+
+logger = logging.getLogger()
+logging.basicConfig(
+    filename="analysis.log",
+    format="%(asctime)s %(message)s",
+    datefmt="%Y-%m-%d %I:%M:%S %p",
+    level=logging.INFO,
+)
+
+# MPI Settings
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+if rank == 0:
+    logger.info("Starting full analysis of Lennard-Jones interactions.")
 
-def add_wca_repulsive(system):
-    nonbonded = [
-        force for force in system.getForces() if isinstance(force, NonbondedForce)
-    ][0]
 
+def add_wca_repulsive(system, nb_force, force_group):
     wca_repulsive = CustomNonbondedForce(
         "step(r_cut - r) * U_sterics;"
         "U_sterics=4*epsilon*x*(x-1.0) + epsilon;"
@@ -40,17 +50,18 @@ def add_wca_repulsive(system):
     wca_repulsive.addPerParticleParameter("sigma")
     wca_repulsive.addPerParticleParameter("epsilon")
     wca_repulsive.setNonbondedMethod(CustomNonbondedForce.CutoffPeriodic)
-    wca_repulsive.setCutoffDistance(nonbonded.getCutoffDistance())
-    wca_repulsive.setUseLongRangeCorrection(nonbonded.getUseDispersionCorrection())
+    wca_repulsive.setCutoffDistance(nb_force.getCutoffDistance())
+    wca_repulsive.setUseLongRangeCorrection(nb_force.getUseDispersionCorrection())
+    wca_repulsive.setForceGroup(force_group)
 
     # Set LJ parameters
-    for atom in range(nonbonded.getNumParticles()):
-        charge, sigma, epsilon = nonbonded.getParticleParameters(atom)
+    for atom in range(nb_force.getNumParticles()):
+        charge, sigma, epsilon = nb_force.getParticleParameters(atom)
         wca_repulsive.addParticle([sigma, epsilon])
 
     # Transfer Exclusion
-    for exception_index in range(nonbonded.getNumExceptions()):
-        iatom, jatom, chargeprod, sigma, epsilon = nonbonded.getExceptionParameters(
+    for exception_index in range(nb_force.getNumExceptions()):
+        iatom, jatom, chargeprod, sigma, epsilon = nb_force.getExceptionParameters(
             exception_index
         )
         wca_repulsive.addExclusion(iatom, jatom)
@@ -58,11 +69,7 @@ def add_wca_repulsive(system):
     system.addForce(wca_repulsive)
 
 
-def add_wca_dispersive(system):
-    nonbonded = [
-        force for force in system.getForces() if isinstance(force, NonbondedForce)
-    ][0]
-
+def add_wca_dispersive(system, nb_force, force_group):
     wca_dispersive = CustomNonbondedForce(
         "(step(r_cut - r) * -1*epsilon) + (step(r - r_cut) * U_sterics);"
         "U_sterics=4*epsilon*x*(x-1.0);"
@@ -74,17 +81,18 @@ def add_wca_dispersive(system):
     wca_dispersive.addPerParticleParameter("sigma")
     wca_dispersive.addPerParticleParameter("epsilon")
     wca_dispersive.setNonbondedMethod(CustomNonbondedForce.CutoffPeriodic)
-    wca_dispersive.setCutoffDistance(nonbonded.getCutoffDistance())
-    wca_dispersive.setUseLongRangeCorrection(nonbonded.getUseDispersionCorrection())
+    wca_dispersive.setCutoffDistance(nb_force.getCutoffDistance())
+    wca_dispersive.setUseLongRangeCorrection(nb_force.getUseDispersionCorrection())
+    wca_dispersive.setForceGroup(force_group)
 
     # Set LJ parameters
-    for atom in range(nonbonded.getNumParticles()):
-        charge, sigma, epsilon = nonbonded.getParticleParameters(atom)
+    for atom in range(nb_force.getNumParticles()):
+        charge, sigma, epsilon = nb_force.getParticleParameters(atom)
         wca_dispersive.addParticle([sigma, epsilon])
 
     # Transfer Exclusion
-    for exception_index in range(nonbonded.getNumExceptions()):
-        iatom, jatom, chargeprod, sigma, epsilon = nonbonded.getExceptionParameters(
+    for exception_index in range(nb_force.getNumExceptions()):
+        iatom, jatom, chargeprod, sigma, epsilon = nb_force.getExceptionParameters(
             exception_index
         )
         wca_dispersive.addExclusion(iatom, jatom)
@@ -104,12 +112,13 @@ def create_simulation(
         system,
         integrator,
         Platform.getPlatformByName("CPU"),
+        {"Threads": "1"},
     )
 
     return simulation
 
 
-def get_potential_energy(simulation, xyz, box):
+def get_energy(simulation, xyz, box, force_group=0):
     box_vectors = unit.Quantity(
         value=[Vec3(box[0], 0, 0), Vec3(0, box[1], 0), Vec3(0, 0, box[2])],
         unit=unit.angstrom,
@@ -118,19 +127,15 @@ def get_potential_energy(simulation, xyz, box):
     simulation.context.setPositions(xyz * unit.angstrom)
     simulation.context.setPeriodicBoxVectors(*box_vectors)
 
-    energy = simulation.context.getState(getEnergy=True, groups={0})
+    energy = simulation.context.getState(getEnergy=True, groups={force_group})
     energy = energy.getPotentialEnergy() / unit.kilocalories_per_mole
 
     return energy
 
 
-def turn_parameters_off(
-    system, atoms_list, parm_type="all", parm_off=True, exception_off=True
+def turn_parm_off(
+    nb_force, atoms_list, parm_type="all", parm_off=True, exception_off=True
 ):
-    nb_force = [
-        force for force in system.getForces() if isinstance(force, NonbondedForce)
-    ][0]
-
     if parm_off:
         for atom in range(nb_force.getNumParticles()):
             if atom in atoms_list:
@@ -163,11 +168,17 @@ def turn_parameters_off(
 
 
 # Load Coordinates and XML file
+if rank == 0:
+    logger.info("Loading XML and PDB files...")
+
 pdbfile = PDBFile("simulations/restrained.pdb")
 with open("simulations/restrained.xml", "r") as f:
     system = XmlSerializer.deserialize(f.read())
 
 # Atom indices
+if rank == 0:
+    logger.info("Defining atom indices of molecules in system...")
+
 guest_resname = "AMT"
 host_resname = "CB7"
 guest_mol = [
@@ -188,152 +199,135 @@ guest_solvent_mol = guest_mol + solvent
 host_solvent_mol = host_mol + solvent
 all_mol = guest_mol + host_mol + solvent
 
-# Remove all forces except `NonbondedForce`
-system.removeForce(4)
-system.removeForce(0)
-system.removeForce(0)
-system.removeForce(0)
+if rank == 0:
+    logger.info("Splitting LJ forces to different components...")
 
-# 01) System LJ
-system_LJ = deepcopy(system)
-turn_parameters_off(system_LJ, all_mol, parm_type="elec")
-turn_parameters_off(system_LJ, all_mol, parm_type="vdw", parm_off=False, exception_off=True)
-sim_total_LJ = create_simulation(system_LJ, pdbfile)
+# Nonbonded force
+nb_force = [force for force in system.getForces() if isinstance(force, NonbondedForce)][
+    0
+]
 
-# 02) System LJ14
-system_LJ14 = deepcopy(system)
-turn_parameters_off(system_LJ14, all_mol, parm_type="elec")
-turn_parameters_off(system_LJ14, all_mol, parm_type="vdw", parm_off=True, exception_off=False)
-sim_total_LJ14 = create_simulation(system_LJ14, pdbfile)
+# Remove electrostatics and all 1-4 interactions
+turn_parm_off(nb_force, all_mol, parm_type="elec")
+turn_parm_off(nb_force, all_mol, parm_type="vdw", parm_off=False, exception_off=True)
 
-# 03) System LJ-rep
-system_rep = deepcopy(system_LJ)
-add_wca_repulsive(system_rep)
-turn_parameters_off(system_rep, all_mol)
-sim_total_LJrep = create_simulation(system_rep, pdbfile)
+# Guest LJ
+guest_LJ = deepcopy(nb_force)
+turn_parm_off(guest_LJ, host_solvent_mol)
 
-# 04) System LJ-dis
-system_dis = deepcopy(system_LJ)
-add_wca_dispersive(system_dis)
-turn_parameters_off(system_dis, all_mol)
-sim_total_LJdis = create_simulation(system_dis, pdbfile)
+# Host LJ
+host_LJ = deepcopy(nb_force)
+turn_parm_off(host_LJ, guest_solvent_mol)
 
-# 05) Guest LJ
-system_guest_LJ = deepcopy(system_LJ)
-turn_parameters_off(system_guest_LJ, host_solvent_mol)
-sim_guest_LJ = create_simulation(system_guest_LJ, pdbfile)
+# Solvent LJ
+sol_LJ = deepcopy(nb_force)
+turn_parm_off(sol_LJ, host_guest_mol)
 
-# 06) Guest LJ14
-system_guest_LJ14 = deepcopy(system)
-turn_parameters_off(system_guest_LJ14, all_mol, parm_type="elec")
-turn_parameters_off(system_guest_LJ14, host_solvent_mol)
-turn_parameters_off(
-    system_guest_LJ14, guest_mol, parm_type="vdw", parm_off=True, exception_off=False
-)
-sim_guest_LJ14 = create_simulation(system_guest_LJ14, pdbfile)
+# Guest-sol LJ
+guest_sol_LJ = deepcopy(nb_force)
+turn_parm_off(guest_sol_LJ, host_mol)
 
-# 07) Guest LJ-rep
-system_guest_LJrep = deepcopy(system_guest_LJ)
-add_wca_repulsive(system_guest_LJrep)
-turn_parameters_off(system_guest_LJrep, all_mol)
-sim_guest_LJrep = create_simulation(system_guest_LJrep, pdbfile)
+# Host-sol LJ
+host_sol_LJ = deepcopy(nb_force)
+turn_parm_off(host_sol_LJ, guest_mol)
 
-# 08) Guest LJ-dis
-system_guest_LJdis = deepcopy(system_guest_LJ)
-add_wca_dispersive(system_guest_LJdis)
-turn_parameters_off(system_guest_LJdis, all_mol)
-sim_guest_LJdis = create_simulation(system_guest_LJdis, pdbfile)
+# Host-Guest LJ
+host_guest_LJ = deepcopy(nb_force)
+turn_parm_off(host_guest_LJ, solvent)
 
-# 09) Host LJ
-system_host_LJ = deepcopy(system_LJ)
-turn_parameters_off(system_host_LJ, guest_solvent_mol)
-sim_host_LJ = create_simulation(system_host_LJ, pdbfile)
+# 01) System LJ-rep
+add_wca_repulsive(system, nb_force, force_group=1)
 
-# 10) Host LJ14
-system_host_LJ14 = deepcopy(system)
-turn_parameters_off(system_host_LJ14, all_mol, parm_type="elec")
-turn_parameters_off(system_host_LJ14, guest_solvent_mol)
-turn_parameters_off(
-    system_host_LJ14, host_mol, parm_type="vdw", parm_off=True, exception_off=False
-)
-sim_host_LJ14 = create_simulation(system_host_LJ14, pdbfile)
+# 02) System LJ-dis
+add_wca_dispersive(system, nb_force, force_group=2)
 
-# 11) Host LJ-rep
-system_host_LJrep = deepcopy(system_host_LJ)
-add_wca_repulsive(system_host_LJrep)
-turn_parameters_off(system_host_LJrep, all_mol)
-sim_host_LJrep = create_simulation(system_host_LJrep, pdbfile)
+# 03) Guest LJ-rep
+add_wca_repulsive(system, guest_LJ, force_group=3)
 
-# 12) Host LJ-dis
-system_host_LJdis = deepcopy(system_host_LJ)
-add_wca_dispersive(system_host_LJdis)
-turn_parameters_off(system_host_LJdis, all_mol)
-sim_host_LJdis = create_simulation(system_host_LJdis, pdbfile)
+# 04) Guest LJ-dis
+add_wca_dispersive(system, guest_LJ, force_group=4)
 
-# 13) Solvent LJ
-system_solvent_LJ = deepcopy(system_LJ)
-turn_parameters_off(system_solvent_LJ, host_guest_mol)
-sim_solvent_LJ = create_simulation(system_solvent_LJ, pdbfile)
+# 05) Host LJ-rep
+add_wca_repulsive(system, host_LJ, force_group=5)
 
-# 14) Solvent LJ-rep
-system_solvent_LJrep = deepcopy(system_solvent_LJ)
-add_wca_repulsive(system_solvent_LJrep)
-turn_parameters_off(system_solvent_LJrep, all_mol)
-sim_solvent_LJrep = create_simulation(system_solvent_LJrep, pdbfile)
+# 06) Host LJ-dis
+add_wca_dispersive(system, host_LJ, force_group=6)
 
-# 15) Solvent LJ-dis
-system_solvent_LJdis = deepcopy(system_solvent_LJ)
-add_wca_dispersive(system_solvent_LJdis)
-turn_parameters_off(system_solvent_LJdis, all_mol)
-sim_solvent_LJdis = create_simulation(system_solvent_LJdis, pdbfile)
+# 07) Solvent LJ-rep
+add_wca_repulsive(system, sol_LJ, force_group=7)
 
-# Load trajectory
-traj_list = [f"simulations/production-{i+1:03}.dcd" for i in range(1)]
+# 08) Solvent LJ-dis
+add_wca_dispersive(system, sol_LJ, force_group=8)
+
+# 09) Guest-sol LJ-rep
+add_wca_repulsive(system, guest_sol_LJ, force_group=9)
+
+# 10) Guest-sol LJ-dis
+add_wca_dispersive(system, guest_sol_LJ, force_group=10)
+
+# 11) Host-sol LJ-rep
+add_wca_repulsive(system, host_sol_LJ, force_group=11)
+
+# 12) Host-sol LJ-dis
+add_wca_dispersive(system, host_sol_LJ, force_group=12)
+
+# 13) Host-Guest LJ-rep
+add_wca_repulsive(system, host_guest_LJ, force_group=13)
+
+# 14) Host-Guest LJ-dis
+add_wca_dispersive(system, host_guest_LJ, force_group=14)
+
+# Simulation Object
+simulation = create_simulation(system, pdbfile)
+
+# Load 1 microsecond long trajectory
+if rank == 0:
+    logger.info("Loading Trajectories")
+traj_list = [f"simulations/production-{i+1:03}.dcd" for i in range(100)]
 universe = Universe("simulations/restrained.pdb", traj_list)
 
 n_frames = universe.trajectory.n_frames
 
-# Configure MPI sizes for nodes
+# Specify array sizes for MPI nodes
 if rank == 0:
-    print(f"Total number of frames {n_frames}")
+    logger.info(f"Total number of frames {n_frames}")
 
 num_per_rank = int(n_frames / size)
 lower_bound = rank * num_per_rank
 upper_bound = (rank + 1) * num_per_rank
+report_freq = int(num_per_rank / 100)
 
 potential = {
-    "total": np.zeros(n_frames),
-    "total_14": np.zeros(n_frames),
     "total_rep": np.zeros(n_frames),
     "total_dis": np.zeros(n_frames),
-    "guest_total": np.zeros(n_frames),
-    "guest_14": np.zeros(n_frames),
     "guest_rep": np.zeros(n_frames),
     "guest_dis": np.zeros(n_frames),
-    "host_total": np.zeros(n_frames),
-    "host_14": np.zeros(n_frames),
     "host_rep": np.zeros(n_frames),
     "host_dis": np.zeros(n_frames),
-    "sol_total": np.zeros(n_frames),
     "sol_rep": np.zeros(n_frames),
     "sol_dis": np.zeros(n_frames),
+    "guest_sol_rep": np.zeros(n_frames),
+    "guest_sol_dis": np.zeros(n_frames),
+    "host_sol_rep": np.zeros(n_frames),
+    "host_sol_dis": np.zeros(n_frames),
+    "host_guest_rep": np.zeros(n_frames),
+    "host_guest_dis": np.zeros(n_frames),
 }
 potential_chunk = {
-    "total": np.zeros(num_per_rank),
-    "total_14": np.zeros(num_per_rank),
     "total_rep": np.zeros(num_per_rank),
     "total_dis": np.zeros(num_per_rank),
-    "guest_total": np.zeros(num_per_rank),
-    "guest_14": np.zeros(num_per_rank),
     "guest_rep": np.zeros(num_per_rank),
     "guest_dis": np.zeros(num_per_rank),
-    "host_total": np.zeros(num_per_rank),
-    "host_14": np.zeros(num_per_rank),
     "host_rep": np.zeros(num_per_rank),
     "host_dis": np.zeros(num_per_rank),
-    "sol_total": np.zeros(num_per_rank),
     "sol_rep": np.zeros(num_per_rank),
     "sol_dis": np.zeros(num_per_rank),
+    "guest_sol_rep": np.zeros(num_per_rank),
+    "guest_sol_dis": np.zeros(num_per_rank),
+    "host_sol_rep": np.zeros(num_per_rank),
+    "host_sol_dis": np.zeros(num_per_rank),
+    "host_guest_rep": np.zeros(num_per_rank),
+    "host_guest_dis": np.zeros(num_per_rank),
 }
 
 # Scatter array to child node
@@ -345,33 +339,55 @@ for decomp in potential.keys():
     )
 
 # Calculate Potential Energy
+if rank == 0:
+    logger.info("Calculating Potential Energy...")
+
 comm.Barrier()
 
 for i, frame in enumerate(tqdm(universe.trajectory[lower_bound:upper_bound])):
+    if rank == 0 and i % report_freq == 0:
+        logger.info(f"Completed: {i/num_per_rank*100:5.2f}%")
+
     xyz = frame.positions
     box = frame.dimensions
 
-    potential_chunk["total"][i]       = get_potential_energy(sim_total_LJ,      xyz, box)
-    potential_chunk["total_14"][i]    = get_potential_energy(sim_total_LJ14,    xyz, box)
-    potential_chunk["total_rep"][i]   = get_potential_energy(sim_total_LJrep,   xyz, box)
-    potential_chunk["total_dis"][i]   = get_potential_energy(sim_total_LJdis,   xyz, box)
+    potential_chunk["total_rep"][i] = get_energy(simulation, xyz, box, force_group=1)
+    potential_chunk["total_dis"][i] = get_energy(simulation, xyz, box, force_group=2)
 
-    potential_chunk["guest_total"][i] = get_potential_energy(sim_guest_LJ,      xyz, box)
-    potential_chunk["guest_14"][i]    = get_potential_energy(sim_guest_LJ14,    xyz, box)
-    potential_chunk["guest_rep"][i]   = get_potential_energy(sim_guest_LJrep,   xyz, box)
-    potential_chunk["guest_dis"][i]   = get_potential_energy(sim_guest_LJdis,   xyz, box)
+    potential_chunk["guest_rep"][i] = get_energy(simulation, xyz, box, force_group=3)
+    potential_chunk["guest_dis"][i] = get_energy(simulation, xyz, box, force_group=4)
 
-    potential_chunk["host_total"][i]  = get_potential_energy(sim_host_LJ,       xyz, box)
-    potential_chunk["host_14"][i]     = get_potential_energy(sim_host_LJ14,     xyz, box)
-    potential_chunk["host_rep"][i]    = get_potential_energy(sim_host_LJrep,    xyz, box)
-    potential_chunk["host_dis"][i]    = get_potential_energy(sim_host_LJdis,    xyz, box)
+    potential_chunk["host_rep"][i] = get_energy(simulation, xyz, box, force_group=5)
+    potential_chunk["host_dis"][i] = get_energy(simulation, xyz, box, force_group=6)
 
-    potential_chunk["sol_total"][i]   = get_potential_energy(sim_solvent_LJ,    xyz, box)
-    potential_chunk["sol_rep"][i]     = get_potential_energy(sim_solvent_LJrep, xyz, box)
-    potential_chunk["sol_dis"][i]     = get_potential_energy(sim_solvent_LJdis, xyz, box)
+    potential_chunk["sol_rep"][i] = get_energy(simulation, xyz, box, force_group=7)
+    potential_chunk["sol_dis"][i] = get_energy(simulation, xyz, box, force_group=8)
 
+    potential_chunk["guest_sol_rep"][i] = get_energy(
+        simulation, xyz, box, force_group=9
+    )
+    potential_chunk["guest_sol_dis"][i] = get_energy(
+        simulation, xyz, box, force_group=10
+    )
+
+    potential_chunk["host_sol_rep"][i] = get_energy(
+        simulation, xyz, box, force_group=11
+    )
+    potential_chunk["host_sol_dis"][i] = get_energy(
+        simulation, xyz, box, force_group=12
+    )
+
+    potential_chunk["host_guest_rep"][i] = get_energy(
+        simulation, xyz, box, force_group=13
+    )
+    potential_chunk["host_guest_dis"][i] = get_energy(
+        simulation, xyz, box, force_group=14
+    )
 
 comm.Barrier()
+
+if rank == 0:
+    logger.info("Completed: 100.00%")
 
 # Combine data back from child node
 for decomp in potential.keys():
@@ -381,6 +397,9 @@ for decomp in potential.keys():
 
 # Save results to JSON
 if rank == 0:
+    logger.info("Saving results to JSON file...")
     with open("enthalpy_WCA.json", "w") as f:
         dumped = json.dumps(potential, cls=NumpyEncoder)
         f.write(dumped)
+
+    logger.info("Analysis completed.")
