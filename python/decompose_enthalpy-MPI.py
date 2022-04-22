@@ -12,11 +12,11 @@ from paprika.io import NumpyEncoder
 from simtk.openmm import (
     HarmonicAngleForce,
     HarmonicBondForce,
+    LangevinIntegrator,
     NonbondedForce,
     PeriodicTorsionForce,
     Platform,
     Vec3,
-    VerletIntegrator,
     XmlSerializer,
 )
 from simtk.openmm.app import PDBFile, Simulation
@@ -38,25 +38,7 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 
 if rank == 0:
-    logger.info("Starting full analysis of Lennard-Jones interactions.")
-
-
-def create_simulation(
-    system,
-    coords,
-    dt=2.0 * unit.femtosecond,
-):
-    integrator = VerletIntegrator(dt)
-
-    simulation = Simulation(
-        coords.topology,
-        system,
-        integrator,
-        Platform.getPlatformByName("CPU"),
-        {"Threads": "1"},
-    )
-
-    return simulation
+    logger.info("Starting full analysis of Binding Enthalpy.")
 
 
 def get_energy(simulation, xyz, box, force_group=0):
@@ -142,7 +124,7 @@ host_solvent_mol = host_mol + solvent
 all_mol = guest_mol + host_mol + solvent
 
 if rank == 0:
-    logger.info("Splitting LJ forces to different components...")
+    logger.info("Splitting Forces to different Force Groups...")
 
 # Valence terms
 harmonic_bond = [
@@ -206,16 +188,26 @@ turn_parm_off(
 system.addForce(nonbonded_LJ14)
 
 # Simulation Object
-simulation = create_simulation(system, pdbfile)
+thermostat = LangevinIntegrator(
+    298.15 * unit.kelvin,
+    1.0 / unit.picosecond,
+    2.0 * unit.femtosecond,
+)
+simulation = Simulation(
+    pdbfile.topology,
+    system,
+    thermostat,
+    Platform.getPlatformByName("CPU"),
+)
 
 # Load 1 microsecond long trajectory
 if rank == 0:
-    logger.info("Loading Trajectories")
+    logger.info("Loading Trajectories...")
 
 traj_list = [f"windows/{window}/production-v{i+1}.dcd" for i in range(200)]
 if rank == 0:
     logger.info(f"{traj_list}")
-universe = Universe(f"windows/{window}/restrained.pdb", traj_list)
+universe = Universe(f"windows/{window}/restrained.pdb", traj_list, in_memory=False)
 
 n_frames = universe.trajectory.n_frames
 
