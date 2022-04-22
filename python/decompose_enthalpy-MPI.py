@@ -170,10 +170,10 @@ system.addForce(nonbonded_Elec14)
 # LJ intermol - remove vdW 1-4 interactions and Elec interactions
 nonbonded_LJ.setForceGroup(3)
 turn_parm_off(
-    nonbonded_LJ, all_mol, parm_type="elec", parm_off=False, exception_off=False
+    nonbonded_LJ, all_mol, parm_type="elec", parm_off=True, exception_off=True
 )
 turn_parm_off(
-    nonbonded_LJ, all_mol, parm_type="vdw", parm_off=True, exception_off=False
+    nonbonded_LJ, all_mol, parm_type="vdw", parm_off=False, exception_off=True
 )
 system.addForce(nonbonded_LJ)
 
