@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
 import logging
+import time
 from importlib import reload
 
 import numpy as np
@@ -18,7 +18,7 @@ reload(logging)
 
 logger = logging.getLogger()
 logging.basicConfig(
-    filename="analysis-tip3p.log",
+    filename="analysis-mpi.log",
     format="%(asctime)s %(message)s",
     datefmt="%Y-%m-%d %I:%M:%S %p",
     level=logging.INFO,
@@ -93,35 +93,33 @@ def add_wca_repulsive(
     system.addForce(wca_repulsive)
 
 
-# In[3]:
-
 if rank == 0:
     logger.info("Initializing calculations - loading trajectories etc...")
 
+particle_radius = 4.5 * openmm_unit.angstrom
+wca_sigma = 3.0 * openmm_unit.angstrom
+wca_epsilon = 0.1 * openmm_unit.kilocalorie_per_mole
 host_resname = "CB7"
 guest_resname = "DM1"
 solvent_resname = "HOH"
 base_name = "restrained"
-water_model = "tip3p"
 
+# Create Universe
 window_list = [f"p{i:03}" for i in range(41)]
 universe = Universe(
-    f"{water_model}/p000/{base_name}.pdb",
-    [f"{water_model}/{window}/production.dcd" for window in window_list],
+    f"p000/{base_name}.pdb",
+    [f"{window}/production.dcd" for window in window_list],
 )
 all_atoms = universe.select_atoms("all")
-guest = universe.select_atoms("resname DM1")
-host = universe.select_atoms("resname CB7 and element C")
-cavity_solvent = universe.select_atoms(
-    "resname HOH and byres (sphzone 5.0 resname CB7)", updating=True
-)
-bulk_solvent = universe.select_atoms(
-    "resname HOH and not byres (sphzone 5.0 resname CB7)", updating=True
-)
+guest = universe.select_atoms(f"resname {guest_resname}")
+host = universe.select_atoms(f"resname {host_resname} and element C")
 
-pdbfile = app.PDBFile(f"{water_model}/p000/{base_name}.pdb")
-with open(f"{water_model}/p000/{base_name}.xml", "r") as f:
+# Load in PDB and XML file
+pdbfile = app.PDBFile(f"p000/{base_name}.pdb")
+with open(f"p000/{base_name}.xml", "r") as f:
     system = openmm.XmlSerializer.deserialize(f.read())
+
+# Atom indices
 dummy_particle = [
     atom.index
     for atom in pdbfile.topology.atoms()
@@ -136,13 +134,14 @@ solvent_indices = [
     if atom.residue.name == solvent_resname
 ]
 
+# Add in WCA repulsive core
 add_wca_repulsive(
     system,
     dummy_particle,
     host_indices,
-    particle_radius=4.5 * openmm_unit.angstrom,
-    wca_sigma=3.0 * openmm_unit.angstrom,
-    wca_epsilon=0.1 * openmm_unit.kilocalorie_per_mole,
+    particle_radius=particle_radius,
+    wca_sigma=wca_sigma,
+    wca_epsilon=wca_epsilon,
     coeff_r=50,
     coeff_a=49,
     force_group=4,
@@ -150,47 +149,29 @@ add_wca_repulsive(
 add_wca_repulsive(
     system,
     dummy_particle,
-    list(cavity_solvent.ix),
-    particle_radius=4.5 * openmm_unit.angstrom,
-    wca_sigma=3.0 * openmm_unit.angstrom,
-    wca_epsilon=0.1 * openmm_unit.kilocalorie_per_mole,
-    coeff_r=50,
-    coeff_a=49,
-    force_group=5,
-)
-add_wca_repulsive(
-    system,
-    dummy_particle,
-    list(bulk_solvent.ix),
-    particle_radius=4.5 * openmm_unit.angstrom,
-    wca_sigma=3.0 * openmm_unit.angstrom,
-    wca_epsilon=0.1 * openmm_unit.kilocalorie_per_mole,
-    coeff_r=50,
-    coeff_a=49,
-    force_group=6,
-)
-add_wca_repulsive(
-    system,
-    dummy_particle,
     solvent_indices,
-    particle_radius=4.5 * openmm_unit.angstrom,
-    wca_sigma=3.0 * openmm_unit.angstrom,
-    wca_epsilon=0.1 * openmm_unit.kilocalorie_per_mole,
+    particle_radius=particle_radius,
+    wca_sigma=wca_sigma,
+    wca_epsilon=wca_epsilon,
     coeff_r=50,
     coeff_a=49,
     force_group=7,
 )
 
-cavity_solvent_force = [
-    force for force in system.getForces() if force.getForceGroup() == 5
-][0]
-bulk_solvent_force = [
-    force for force in system.getForces() if force.getForceGroup() == 6
-][0]
-
+# Create Integrator and Simulation object again
+thermostat = openmm.LangevinIntegrator(
+    298.15 * openmm_unit.kelvin,
+    1.0 / openmm_unit.picosecond,
+    2.0 * openmm_unit.femtosecond,
+)
+simulation = app.Simulation(
+    pdbfile.topology,
+    system,
+    thermostat,
+    openmm.Platform.getPlatformByName("CPU"),
+)
 
 # Specify array sizes for MPI nodes
-
 n_frames = universe.trajectory.n_frames
 num_per_rank = int(n_frames / size)
 lower_bound = rank * num_per_rank
@@ -203,21 +184,15 @@ r = np.linspace(0, 15, 61)
 
 chunk_n_bins = np.zeros(len(r))
 chunk_mean_force_host = np.zeros(len(r))
-chunk_mean_force_cavity_solvent = np.zeros(len(r))
-chunk_mean_force_bulk_solvent = np.zeros(len(r))
 chunk_mean_force_all_solvent = np.zeros(len(r))
 
 if rank == 0:
     n_bins = np.zeros(len(r))
     mean_force_host = np.zeros(len(r))
-    mean_force_cavity_solvent = np.zeros(len(r))
-    mean_force_bulk_solvent = np.zeros(len(r))
     mean_force_all_solvent = np.zeros(len(r))
 else:
     n_bins = None
     mean_force_host = None
-    mean_force_cavity_solvent = None
-    mean_force_bulk_solvent = None
     mean_force_all_solvent = None
 
 
@@ -225,33 +200,13 @@ comm.Barrier()
 
 
 if rank == 0:
+    start = time.time()
     logger.info("Analyzing trajectories...")
 
 for i, frame in enumerate(tqdm(universe.trajectory[lower_bound:upper_bound])):
     # Report Completion
     if rank == 0 and i % report_freq == 0:
         logger.info(f"Completed: {i/num_per_rank*100:5.2f}%")
-
-    # Update water selection
-    cavity_solvent_force.setInteractionGroupParameters(
-        0, dummy_particle, list(cavity_solvent.ix)
-    )
-    bulk_solvent_force.setInteractionGroupParameters(
-        0, dummy_particle, list(bulk_solvent.ix)
-    )
-
-    # Create Integrator and Simulation object again
-    thermostat = openmm.LangevinIntegrator(
-        298.15 * openmm_unit.kelvin,
-        1.0 / openmm_unit.picosecond,
-        2.0 * openmm_unit.femtosecond,
-    )
-    simulation = app.Simulation(
-        pdbfile.topology,
-        system,
-        thermostat,
-        openmm.Platform.getPlatformByName("CPU"),
-    )
 
     # Set Box vectors and Coordinates
     box = universe.dimensions
@@ -274,12 +229,6 @@ for i, frame in enumerate(tqdm(universe.trajectory[lower_bound:upper_bound])):
 
     # Calculate Forces
     force_by_host = simulation.context.getState(getForces=True, groups={4}).getForces()
-    force_by_cavity_solvent = simulation.context.getState(
-        getForces=True, groups={5}
-    ).getForces()
-    force_by_bulk_solvent = simulation.context.getState(
-        getForces=True, groups={6}
-    ).getForces()
     force_by_all_solvent = simulation.context.getState(
         getForces=True, groups={7}
     ).getForces()
@@ -288,22 +237,6 @@ for i, frame in enumerate(tqdm(universe.trajectory[lower_bound:upper_bound])):
     chunk_mean_force_host[i_loc] += np.dot(
         np.array(
             force_by_host[dummy_particle[0]].value_in_unit(
-                openmm_unit.kilocalorie_per_mole / openmm_unit.angstrom
-            )
-        ),
-        z_axis,
-    )
-    chunk_mean_force_cavity_solvent[i_loc] += np.dot(
-        np.array(
-            force_by_cavity_solvent[dummy_particle[0]].value_in_unit(
-                openmm_unit.kilocalorie_per_mole / openmm_unit.angstrom
-            )
-        ),
-        z_axis,
-    )
-    chunk_mean_force_bulk_solvent[i_loc] += np.dot(
-        np.array(
-            force_by_bulk_solvent[dummy_particle[0]].value_in_unit(
                 openmm_unit.kilocalorie_per_mole / openmm_unit.angstrom
             )
         ),
@@ -318,10 +251,6 @@ for i, frame in enumerate(tqdm(universe.trajectory[lower_bound:upper_bound])):
         z_axis,
     )
 
-    del simulation
-    del thermostat
-
-
 comm.Barrier()
 
 
@@ -330,18 +259,6 @@ comm.Reduce([chunk_n_bins, MPI.DOUBLE], [n_bins, MPI.DOUBLE], op=MPI.SUM, root=0
 comm.Reduce(
     [chunk_mean_force_host, MPI.DOUBLE],
     [mean_force_host, MPI.DOUBLE],
-    op=MPI.SUM,
-    root=0,
-)
-comm.Reduce(
-    [chunk_mean_force_cavity_solvent, MPI.DOUBLE],
-    [mean_force_cavity_solvent, MPI.DOUBLE],
-    op=MPI.SUM,
-    root=0,
-)
-comm.Reduce(
-    [chunk_mean_force_bulk_solvent, MPI.DOUBLE],
-    [mean_force_bulk_solvent, MPI.DOUBLE],
     op=MPI.SUM,
     root=0,
 )
@@ -358,30 +275,22 @@ comm.Barrier()
 # Post-process and print results
 if rank == 0:
     logger.info("Post-processing...")
+    end = time.time()
+    logger.info(f"Total time taken: {(end-start)} seconds")
 
     n_bins[n_bins == 0.0] = 1.0
-    mean_force_host /= n_bins
-    mean_force_cavity_solvent /= n_bins
-    mean_force_bulk_solvent /= n_bins
-    mean_force_all_solvent /= n_bins
 
     # Integrate Forces
-    pmf_host = cumtrapz(-1 * mean_force_host, x=r, initial=0.0)
-    pmf_cavity_solvent = cumtrapz(-1 * mean_force_cavity_solvent, x=r, initial=0.0)
-    pmf_bulk_solvent = cumtrapz(-1 * mean_force_bulk_solvent, x=r, initial=0.0)
-    pmf_all_solvent = cumtrapz(-1 * mean_force_all_solvent, x=r, initial=0.0)
+    pmf_host = cumtrapz(-1 * mean_force_host / n_bins, x=r, initial=0.0)
+    pmf_all_solvent = cumtrapz(-1 * mean_force_all_solvent / n_bins, x=r, initial=0.0)
 
     np.savetxt(
-        f"mean_force-{water_model}-split-mpi.txt",
+        "mean_force-split-mpi.txt",
         np.c_[
             r,
             pmf_host,
-            pmf_cavity_solvent,
-            pmf_bulk_solvent,
-            pmf_cavity_solvent + pmf_bulk_solvent,
             pmf_all_solvent,
-            pmf_host + pmf_cavity_solvent + pmf_bulk_solvent,
+            pmf_host + pmf_all_solvent,
         ],
-        # np.c_[r, pmf_host, pmf_all_solvent, pmf_host+pmf_all_solvent],
         fmt="%10.5f",
     )
