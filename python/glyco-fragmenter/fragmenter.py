@@ -170,7 +170,7 @@ class CyclodextrinFragmenter:
         file: str
             File name
         file_format: str
-            File format -- either SDF or MOL2(through parmed)
+            File format -- either SDF, MOL2 and PDB (through parmed)
         residue_name: str
             Residue name -- mainly for MOL2 files
         atom_type: str
@@ -181,7 +181,7 @@ class CyclodextrinFragmenter:
         if file_format == "SDF":
             off_molecule.to_file(file, file_format=file_format)
 
-        elif file_format == "MOL2":
+        elif file_format == "MOL2" or file_format == "PDB":
             structure = parmed.openmm.load_topology(
                 off_molecule.to_topology().to_openmm(), xyz=off_molecule.conformers[0]
             )
@@ -193,29 +193,30 @@ class CyclodextrinFragmenter:
             structure.save(file, overwrite=True)
 
             # Rewrite with residue name and atom type using Antechamber
-            output = subprocess.Popen(
-                [
-                    "antechamber",
-                    "-fi",
-                    "mol2",
-                    "-fo",
-                    "mol2",
-                    "-i",
-                    file,
-                    "-o",
-                    file,
-                    "-rn",
-                    residue_name,
-                    "-at",
-                    atom_type,
-                    "-pf",
-                    "y",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd="./",
-            )
-            output = output.stdout.read().decode().splitlines()
+            if file_format == "MOL2":
+                output = subprocess.Popen(
+                    [
+                        "antechamber",
+                        "-fi",
+                        "mol2",
+                        "-fo",
+                        "mol2",
+                        "-i",
+                        file,
+                        "-o",
+                        file,
+                        "-rn",
+                        residue_name,
+                        "-at",
+                        atom_type,
+                        "-pf",
+                        "y",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd="./",
+                )
+                output = output.stdout.read().decode().splitlines()
 
     @staticmethod
     def _get_atom_map_number(atom: Chem.Atom) -> int:
