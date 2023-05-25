@@ -11,7 +11,9 @@ from rdkit.Chem import AllChem as Chem
 class CyclodextrinFragmenter:
     """
     Class that defines a Cyclodextrin molecule with methods to assign partial charges
-    using a fragment-based approach.
+    using a fragment-based approach. This adapted from Tobias Hüfner's code:
+
+    https://github.com/wutobias/collection/blob/master/python/am1bcc-glyco-fragmenter.py
     """
 
     @property
