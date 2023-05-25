@@ -71,7 +71,7 @@ class CyclodextrinFragmenter:
         self._partial_charge_list = []
         self._partial_charge_dictionary = {}
 
-    def add_monomers(self, molecule: Chem.Mol):
+    def add_monomer(self, molecule: Chem.Mol):
         """Utility function that adds monomers to the list."""
         self.monomers.append(molecule)
 
