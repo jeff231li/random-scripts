@@ -193,30 +193,29 @@ class CyclodextrinFragmenter:
             structure.save(file, overwrite=True)
 
             # Rewrite with residue name and atom type using Antechamber
-            if file_format == "MOL2":
-                output = subprocess.Popen(
-                    [
-                        "antechamber",
-                        "-fi",
-                        "mol2",
-                        "-fo",
-                        "mol2",
-                        "-i",
-                        file,
-                        "-o",
-                        file,
-                        "-rn",
-                        residue_name,
-                        "-at",
-                        atom_type,
-                        "-pf",
-                        "y",
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    cwd="./",
-                )
-                output = output.stdout.read().decode().splitlines()
+            output = subprocess.Popen(
+                [
+                    "antechamber",
+                    "-fi",
+                    "mol2",
+                    "-fo",
+                    file_format.lower(),
+                    "-i",
+                    file,
+                    "-o",
+                    file,
+                    "-rn",
+                    residue_name,
+                    "-at",
+                    atom_type,
+                    "-pf",
+                    "y",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd="./",
+            )
+            output = output.stdout.read().decode().splitlines()
 
     @staticmethod
     def _get_atom_map_number(atom: Chem.Atom) -> int:
